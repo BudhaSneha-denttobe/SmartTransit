@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vijayawada Bus Simulator — Bus 11</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter','Segoe UI',system-ui,sans-serif;background:#0c0f15;color:#e2e8f0;height:100vh;overflow:hidden}
+#app{display:flex;height:100vh}
+#sidebar{width:380px;min-width:380px;background:#11151e;border-right:1px solid #1e293b;display:flex;flex-direction:column;overflow:hidden}
+#sidebar-header{padding:24px 24px 16px;border-bottom:1px solid #1e293b}
+#sidebar-header h1{font-size:20px;font-weight:700;letter-spacing:-0.3px;color:#f1f5f9}
+#sidebar-header h1 span{color:#38BDF8}
+#sidebar-header p{font-size:13px;color:#64748b;margin-top:4px}
+#status-card{margin:16px 20px 0;padding:16px 18px;background:linear-gradient(135deg,#0f172a,#1a2332);border:1px solid #1e293b;border-radius:12px;display:flex;align-items:center;gap:14px}
+#status-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0;background:#22c55e;box-shadow:0 0 12px rgba(34,197,94,0.4)}
+#status-dot.layover{background:#facc15;box-shadow:0 0 12px rgba(250,204,21,0.4)}
+#status-dot.idle{background:#64748b;box-shadow:none}
+#status-info{flex:1;min-width:0}
+#status-label{font-size:11px;text-transform:uppercase;letter-spacing:0.8px;color:#64748b;font-weight:600}
+#status-text{font-size:15px;font-weight:600;color:#f1f5f9;margin-top:1px}
+#status-sub{font-size:12px;color:#64748b;margin-top:1px}
+#status-progress{font-size:13px;font-weight:700;color:#38BDF8}
+#schedule-section{flex:1;overflow-y:auto;padding:16px 20px 24px}
+#schedule-section h2{font-size:11px;text-transform:uppercase;letter-spacing:0.8px;color:#64748b;font-weight:600;margin-bottom:12px}
+.sched-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;margin-bottom:4px;transition:all 0.3s;border:1px solid transparent}
+.sched-item:hover{background:#1a2332}
+.sched-item.active{background:#1e3a5f;border-color:#38BDF8;box-shadow:0 0 16px rgba(56,189,248,0.1)}
+.sched-time{font-size:14px;font-weight:600;color:#94a3b8;min-width:52px}
+.sched-item.active .sched-time{color:#38BDF8}
+.sched-route{font-size:13px;color:#cbd5e1;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sched-trip{font-size:11px;color:#64748b;min-width:36px;text-align:right}
+.sched-item.active .sched-trip{color:#38BDF8}
+#schedule-end{text-align:center;padding:20px 0 8px;font-size:12px;color:#334155}
+#map-container{flex:1;position:relative}
+#map{height:100%;width:100%}
+.custom-bus-icon{background:transparent!important;border:none!important}
+.bus-marker-inner{width:36px;height:36px;background:linear-gradient(135deg,#00bfff,#00ff87);border-radius:50%;border:3px solid #fff;box-shadow:0 0 24px rgba(0,191,255,0.7);display:flex;align-items:center;justify-content:center;font-size:18px;transition:transform 0.3s}
+.stop-icon-s{background:transparent!important;border:none!important}
+.stop-inner-s{width:22px;height:22px;background:#FACC15;border:3px solid #38BDF8;border-radius:50%;box-shadow:0 0 14px rgba(56,189,248,0.5)}
+.stop-icon-e{background:transparent!important;border:none!important}
+.stop-inner-e{width:16px;height:16px;background:#38BDF8;border:2px solid #fff;border-radius:50%;box-shadow:0 0 10px rgba(56,189,248,0.4)}
+@media(max-width:768px){#sidebar{width:100%;min-width:unset;max-height:50vh}#app{flex-direction:column}}
+</style>
+</head>
+<body>
+<div id="app">
+<aside id="sidebar">
+<div id="sidebar-header">
+<h1>🚍 Bus <span>11</span></h1>
+<p>Vijayawada Transit Simulator</p>
+</div>
+<div id="status-card">
+<div id="status-dot" class="idle"></div>
+<div id="status-info">
+<div id="status-label">System Status</div>
+<div id="status-text">Initializing...</div>
+<div id="status-sub"></div>
+</div>
+<div id="status-progress">--</div>
+</div>
+<div id="schedule-section">
+<h2>Daily Schedule</h2>
+<div id="schedule-list"></div>
+<div id="schedule-end">End of schedule</div>
+</div>
+</aside>
+<div id="map-container">
+<div id="map"></div>
+</div>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function(){
+'use strict';
+
+var PATAMATA = [16.4951, 80.6611];
+var AUTONAGAR = [16.4907, 80.6709];
+var VIJAYAWADA_CENTER = [16.4907, 80.6709];
+
+var INTERMEDIATE_STOPS = [
+[16.4930, 80.6635],
+[16.4915, 80.6660],
+[16.4900, 80.6685]
+];
+
+var ROUTE_PATH = [PATAMATA].concat(INTERMEDIATE_STOPS).concat([AUTONAGAR]);
+
+function timeToMinutes(str) {
+var p = str.split(':');
+return parseInt(p[0],10)*60 + parseInt(p[1],10);
+}
+
+function minutesToTime(m) {
+var h = Math.floor(m/60);
+var min = m%60;
+return String(h).padStart(2,'0')+':'+String(min).padStart(2,'0');
+}
+
+var BASE = timeToMinutes('08:12');
+var INTERVAL = 18;
+var TRIP_COUNT = 16;
+var DURATION_MIN = 14;
+
+var schedule = [];
+for(var i=0;i<TRIP_COUNT;i++){
+var startMin = BASE + i*INTERVAL;
+var endMin = startMin + DURATION_MIN;
+if(endMin>=1440) break;
+schedule.push({
+index:i,
+tripId:'TRIP_'+(i+1),
+label:'Trip '+(i+1),
+departure:minutesToTime(startMin),
+arrival:minutesToTime(endMin),
+startMin:startMin,
+endMin:endMin,
+from:'Patamata',
+to:'Autonagar'
+});
+}
+
+(function renderSchedule(){
+var list = document.getElementById('schedule-list');
+list.innerHTML='';
+schedule.forEach(function(t){
+var div=document.createElement('div');
+div.className='sched-item';
+div.id='sched-'+t.index;
+div.innerHTML='<span class="sched-time">'+t.departure+'</span><span class="sched-route">'+t.from+' → '+t.to+'</span><span class="sched-trip">'+t.label+'</span>';
+list.appendChild(div);
+});
+})();
+
+var map = L.map('map',{
+center:VIJAYAWADA_CENTER,
+zoom:14,
+zoomControl:true,
+attributionControl:true
+});
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+maxZoom:19,
+attribution:'&copy; <a href="https://openstreetmap.org/copyright">OSM</a>'
+}).addTo(map);
+
+var startIcon = L.divIcon({
+className:'stop-icon-s',
+html:'<div class="stop-inner-s"></div>',
+iconSize:[28,28],
+iconAnchor:[14,14]
+});
+var endIcon = L.divIcon({
+className:'stop-icon-e',
+html:'<div class="stop-inner-e"></div>',
+iconSize:[20,20],
+iconAnchor:[10,10]
+});
+var busIcon = L.divIcon({
+className:'custom-bus-icon',
+html:'<div class="bus-marker-inner">🚍</div>',
+iconSize:[42,42],
+iconAnchor:[21,21]
+});
+
+L.marker(PATAMATA,{icon:startIcon}).addTo(map).bindPopup('<strong>🟡 Patamata</strong><br>Start Terminal');
+L.marker(AUTONAGAR,{icon:endIcon}).addTo(map).bindPopup('<strong>🔵 Autonagar</strong><br>End Terminal');
+
+var routeLine = L.polyline(ROUTE_PATH,{
+color:'#38BDF8',
+weight:3,
+opacity:0.5,
+dashArray:'8 12'
+}).addTo(map);
+
+var busMarker = L.marker(PATAMATA,{icon:busIcon,zIndexOffset:1000}).addTo(map);
+var popupContent = '<div style="min-width:160px;font-family:system-ui,sans-serif;line-height:1.5">'+
+'<strong style="color:#38BDF8;font-size:15px">🚍 Bus 11</strong><br>'+
+'<span style="color:#94a3b8;font-size:12px">From: <span id="popup-from">Patamata</span></span><br>'+
+'<span style="color:#94a3b8;font-size:12px">To: <span id="popup-to">Autonagar</span></span><br>'+
+'<div style="margin-top:6px;height:4px;background:#1e293b;border-radius:2px;overflow:hidden">'+
+'<div id="popup-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#38BDF8,#00ff87);border-radius:2px;transition:width 0.3s"></div></div>'+
+'<span id="popup-pct" style="font-size:13px;font-weight:700;color:#00ff87;margin-top:4px;display:inline-block">0%</span>'+
+'</div>';
+busMarker.bindPopup(popupContent,{closeButton:false});
+
+function updatePopup(pct,from,to){
+var bar=document.getElementById('popup-bar');
+var pctEl=document.getElementById('popup-pct');
+var fromEl=document.getElementById('popup-from');
+var toEl=document.getElementById('popup-to');
+if(bar) bar.style.width=Math.round(pct)+'%';
+if(pctEl) pctEl.textContent=Math.round(pct)+'%';
+if(fromEl) fromEl.textContent=from;
+if(toEl) toEl.textContent=to;
+}
+
+map.fitBounds(routeLine.getBounds(),{padding:[60,60]});
+
+var state = {
+tripIndex:-1,
+active:false,
+phase:'idle',
+progress:0,
+layoverTimer:0,
+animFrame:null,
+startTime:0
+};
+
+var statusDot=document.getElementById('status-dot');
+var statusText=document.getElementById('status-text');
+var statusSub=document.getElementById('status-sub');
+var statusProgress=document.getElementById('status-progress');
+
+function setStatus(phase,text,sub,prog){
+statusDot.className='';
+if(phase==='transit') statusDot.id='status-dot';
+else if(phase==='layover'){statusDot.id='status-dot';statusDot.classList.add('layover');}
+else{statusDot.id='status-dot';statusDot.classList.add('idle');}
+statusText.textContent=text;
+statusSub.textContent=sub||'';
+statusProgress.textContent=prog||'--';
+}
+
+function highlightTrip(idx){
+document.querySelectorAll('.sched-item').forEach(function(el){el.classList.remove('active');});
+var el=document.getElementById('sched-'+idx);
+if(el) el.classList.add('active');
+}
+
+function findNextTripIndex(){
+var now = new Date();
+var currentMin = now.getHours()*60+now.getMinutes();
+for(var i=0;i<schedule.length;i++){
+if(schedule[i].startMin>=currentMin) return i;
+}
+return -1;
+}
+
+function lerp(a,b,t){return a+(b-a)*t;}
+
+function getPositionOnPath(fraction){
+var totalSegments = ROUTE_PATH.length-1;
+var totalLen = fraction*totalSegments;
+var segIdx = Math.min(Math.floor(totalLen),totalSegments-1);
+var segFrac = totalLen-segIdx;
+var from = ROUTE_PATH[segIdx];
+var to = ROUTE_PATH[segIdx+1];
+return [
+lerp(from[0],to[0],segFrac),
+lerp(from[1],to[1],segFrac)
+];
+}
+
+var ANIM_DURATION_MS = DURATION_MIN*60*1000;
+var LAYOVER_MS = 5000;
+
+function animateTrip(tripIdx){
+if(tripIdx<0||tripIdx>=schedule.length){
+setStatus('idle','All trips completed','Schedule finished for today','--');
+return;
+}
+
+state.tripIndex=tripIdx;
+state.active=true;
+state.phase='transit';
+state.progress=0;
+
+highlightTrip(tripIdx);
+var trip = schedule[tripIdx];
+setStatus('transit','En route — '+trip.label,trip.from+' → '+trip.to,'0%');
+
+busMarker.setLatLng(PATAMATA);
+busMarker.openPopup();
+
+state.startTime = performance.now();
+
+function step(now){
+var elapsed = now-state.startTime;
+var rawFrac = elapsed/ANIM_DURATION_MS;
+var frac = Math.min(rawFrac,1);
+state.progress = frac;
+
+var pos = getPositionOnPath(frac);
+busMarker.setLatLng(pos);
+
+var pct = frac*100;
+updatePopup(pct,trip.from,trip.to);
+setStatus('transit','En route — '+trip.label,trip.from+' → '+trip.to,Math.round(pct)+'%');
+
+if(frac<1){
+state.animFrame = requestAnimationFrame(step);
+} else {
+busMarker.setLatLng(AUTONAGAR);
+updatePopup(100,trip.from,trip.to);
+setStatus('transit','Arrived — '+trip.label,trip.from+' → '+trip.to,'100%');
+
+setTimeout(function(){
+beginLayover(tripIdx);
+},500);
+}
+}
+
+state.animFrame = requestAnimationFrame(step);
+}
+
+function beginLayover(tripIdx){
+state.phase='layover';
+state.active=false;
+busMarker.closePopup();
+setStatus('layover','Layover — '+(tripIdx+1),(schedule[tripIdx]||{}).from+' → '+(schedule[tripIdx]||{}).to,'5s');
+
+var countdown=5;
+statusProgress.textContent='5s';
+var iv=setInterval(function(){
+countdown--;
+statusProgress.textContent=countdown+'s';
+if(countdown<=0){
+clearInterval(iv);
+busMarker.setLatLng(PATAMATA);
+var next = tripIdx+1;
+if(next<schedule.length){
+highlightTrip(next);
+setStatus('idle','Next: '+schedule[next].label, schedule[next].departure+' — '+schedule[next].arrival,'--');
+setTimeout(function(){animateTrip(next);},300);
+} else {
+setStatus('idle','All trips completed','Schedule finished for today','--');
+}
+}
+},1000);
+}
+
+function autoStart(){
+var idx = findNextTripIndex();
+if(idx===-1){
+var last = schedule.length-1;
+var now = new Date();
+var currentMin = now.getHours()*60+now.getMinutes();
+if(currentMin<schedule[0].startMin){
+idx=0;
+} else {
+setStatus('idle','All trips completed','Schedule finished for today','--');
+return;
+}
+}
+if(idx>=0&&idx<schedule.length){
+setStatus('idle','Next: '+schedule[idx].label,schedule[idx].departure+' — '+schedule[idx].arrival,'--');
+highlightTrip(idx);
+setTimeout(function(){animateTrip(idx);},800);
+}
+}
+
+var checkInterval = setInterval(function(){
+if(!state.active && state.phase==='idle' && state.tripIndex<0){
+var idx = findNextTripIndex();
+if(idx!==-1 && idx!==state.tripIndex){
+clearInterval(checkInterval);
+autoStart();
+}
+}
+},10000);
+
+autoStart();
+
+})();
+</script>
+</body>
+</html>
